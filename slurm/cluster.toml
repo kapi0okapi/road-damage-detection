@@ -1,0 +1,65 @@
+# Slurm cluster settings and job definitions, rendered by slurm/generate.py.
+# Put your account in slurm/cluster.local.toml (not committed):  [cluster]  account = "..."
+# Experiment order: prepare -> train-all + train-no-norway -> finetune-norway -> eval-matrix -> export.
+# Find your Slurm account with:  sacctmgr show assoc format=Account%20,User,QOS | grep $USER
+
+[cluster]
+account = "CHANGE_ME"   # overridden by slurm/cluster.local.toml
+python_module = "Python/3.11.3-GCCcore-12.3.0"   # module spider Python
+venv = "/cluster/work/$USER/venvs/road-damage-detection"
+workdir = "/cluster/work/$USER/road-damage-detection"   # $DATA = workdir/data, $RUNS = workdir/runs
+mail_user = ""
+
+[cluster.env]
+YOLO_OFFLINE = "1"   # weights and fonts are pre-fetched by scripts/download_models.sh
+
+[defaults]
+partition = "GPUQ"
+time = "2-00:00:00"
+cpus = 12
+mem = "48G"
+gpus = 1
+constraint = "gpu32g|gpu40g|gpu80g"   # V100 32 GB, A100, H100 (setup_cluster.sh installs PyTorch for CUDA 12.6)
+
+[jobs.prepare]
+description = "RDD2022 -> YOLO dataset, per-country block splits, experiment yamls (CPU)"
+partition = "CPUQ"
+gpus = 0
+cpus = 2
+mem = "8G"
+time = "0-01:00:00"
+command = "python -m road_damage.datasets.rdd2022 --raw $DATA/RDD2022 --out $DATA/rdd2022_yolo"
+
+[jobs.train-all]
+description = "YOLO26s on all countries (reference model)"
+command = "python -m road_damage.train --data $DATA/rdd2022_yolo/data/all.yaml --model yolo26s.pt --name all_yolo26s --epochs 60"
+
+[jobs.train-no-norway]
+description = "YOLO26s without Norwegian data: how well does it transfer to Norway?"
+command = "python -m road_damage.train --data $DATA/rdd2022_yolo/data/no_norway.yaml --model yolo26s.pt --name no_norway_yolo26s --epochs 60"
+
+[jobs.finetune-norway]
+description = "Fine-tune the no-Norway model on 10/25/50/100 % of Norway (array): learning curve"
+time = "0-12:00:00"
+command = "python -m road_damage.train --model $RUNS/no_norway_yolo26s/weights/best.pt --epochs 40 --lr0 0.002 $ARRAY_ARGS"
+array = [
+    "--data $DATA/rdd2022_yolo/data/norway_10.yaml --name finetune_norway_10",
+    "--data $DATA/rdd2022_yolo/data/norway_25.yaml --name finetune_norway_25",
+    "--data $DATA/rdd2022_yolo/data/norway_50.yaml --name finetune_norway_50",
+    "--data $DATA/rdd2022_yolo/data/norway_100.yaml --name finetune_norway_100",
+]
+
+[jobs.finetune-replay]
+description = "Fine-tune the no-Norway model on all of Norway plus as many replayed photos from the other countries"
+time = "0-12:00:00"
+command = "python -m road_damage.train --model $RUNS/no_norway_yolo26s/weights/best.pt --epochs 40 --lr0 0.002 --data $DATA/rdd2022_yolo/data/norway_replay.yaml --name finetune_norway_replay"
+
+[jobs.eval-matrix]
+description = "Every model on every country's test block -> cross-country mAP table"
+time = "0-03:00:00"
+command = "python -m road_damage.evaluate --data-dir $DATA/rdd2022_yolo/data --out $RUNS/cross_country.json --models all=$RUNS/all_yolo26s/weights/best.pt no_norway=$RUNS/no_norway_yolo26s/weights/best.pt ft10=$RUNS/finetune_norway_10/weights/best.pt ft25=$RUNS/finetune_norway_25/weights/best.pt ft50=$RUNS/finetune_norway_50/weights/best.pt ft100=$RUNS/finetune_norway_100/weights/best.pt replay=$RUNS/finetune_norway_replay/weights/best.pt"
+
+[jobs.export]
+description = "ONNX export with PyTorch parity check, CPU latency, TensorRT FP16 benchmark"
+time = "0-01:00:00"
+command = "bash scripts/export_and_benchmark.sh $RUNS/all_yolo26s/weights/best.pt"

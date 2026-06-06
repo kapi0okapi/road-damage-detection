@@ -1,0 +1,45 @@
+name: deploy-aws
+
+# Manual deployment to AWS App Runner. Needs, in the repository settings:
+#   secret   AWS_ROLE_ARN    IAM role trusted for GitHub OIDC with ECR push + App Runner update rights
+#   variable AWS_REGION      e.g. eu-north-1 (Stockholm)
+#   variable ECR_REPOSITORY  e.g. road-damage-api
+#   variable APPRUNNER_ARN   ARN of the service created once with deploy/aws/create_service.sh
+#   variable APPRUNNER_ECR_ROLE_ARN  role App Runner uses to pull from ECR (printed by the same script)
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Release tag whose road_damage.onnx is deployed"
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: mkdir -p models && gh release download "${{ inputs.release }}" --pattern road_damage.onnx --dir models
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ inputs.release }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+      - name: Point App Runner at the new image
+        run: |
+          aws apprunner update-service --service-arn "${{ vars.APPRUNNER_ARN }}" \
+            --source-configuration "ImageRepository={ImageIdentifier=$IMAGE,ImageRepositoryType=ECR,ImageConfiguration={Port=8080}},AutoDeploymentsEnabled=false,AuthenticationConfiguration={AccessRoleArn=${{ vars.APPRUNNER_ECR_ROLE_ARN }}}"

@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "road-damage-detection"
+version = "0.1.0"
+description = "Road damage detection (RDD2022, Norway focus): YOLO training on Slurm, ONNX Runtime inference, FastAPI service on AWS."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Kacper Pawlowski" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+    "onnxruntime>=1.18",
+]
+
+[project.optional-dependencies]
+serve = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9"]
+train = ["ultralytics>=8.4", "onnx>=1.16", "onnxslim>=0.1", "tensorboard>=2.16"]
+dev = ["road-damage-detection[serve]", "pytest>=8", "ruff>=0.6", "httpx2>=2.0", "onnx>=1.16"]
+
+[project.scripts]
+rdd-prepare = "road_damage.datasets.rdd2022:main"
+rdd-train = "road_damage.train:main"
+rdd-eval = "road_damage.evaluate:main"
+rdd-export = "road_damage.export:main"
+rdd-predict = "road_damage.predict:main"
+rdd-benchmark = "road_damage.benchmark:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

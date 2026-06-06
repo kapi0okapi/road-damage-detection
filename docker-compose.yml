@@ -1,0 +1,9 @@
+services:
+  api:
+    build: .
+    image: road-damage-api:latest
+    ports:
+      - "8080:8080"
+    environment:
+      RDD_CONF: "0.25"
+    restart: unless-stopped
